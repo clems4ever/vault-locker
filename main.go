@@ -45,7 +45,7 @@ func main() {
 }
 
 func unsealVault(secret string) error {
-	cmd := exec.Command("cryptsetup", "open", "/dev/vault", "vault")
+	cmd := exec.Command("cryptsetup", "open", "/dev/vault", "vault", "--key-file=/root/key.bin")
 	var errb bytes.Buffer
 	cmd.Stderr = &errb
 	stdin, err := cmd.StdinPipe()
@@ -110,10 +110,10 @@ func showPasswordDialog() (string, error) {
 func mountVaultProcess() error {
 	var err error
 	var secret string
-	secret, err = showPasswordDialog()
+	/* secret, err = showPasswordDialog()
 	if err != nil {
 		return err
-	}
+	}*/
 
 	fmt.Println("Unsealing vault...")
 	err = unsealVault(secret + "\n")
@@ -147,12 +147,12 @@ func onMounted() {
 		fmt.Println(err)
 	}
 
-	for err != ErrDialogCanceled && err != nil {
+	/* for err != ErrDialogCanceled && err != nil {
 		err = mountVaultProcess()
 		if err != nil {
 			fmt.Println(err)
 		}
-	}
+	} */
 }
 
 func showErrorDialog(message string) error {
