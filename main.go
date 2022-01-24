@@ -11,11 +11,13 @@ import (
 	"github.com/godbus/dbus/v5"
 )
 
+var KeyFilePath = "/root/vault.bin"
+
 // ErrDialogCanceled error representing the user cancelling the dialog
-var ErrDialogCanceled = errors.New("User canceled dialog")
+var ErrDialogCanceled = errors.New("user canceled dialog")
 
 // ErrProcessExitedAbnormally represent an abnormal termination of the process
-var ErrProcessExitedAbnormally = errors.New("Process exited abnormally")
+var ErrProcessExitedAbnormally = errors.New("process exited abnormally")
 
 func main() {
 	conn, err := dbus.SystemBus()
@@ -45,7 +47,7 @@ func main() {
 }
 
 func unsealVault(secret string) error {
-	cmd := exec.Command("cryptsetup", "open", "/dev/vault", "vault", "--key-file=/root/key.bin")
+	cmd := exec.Command("cryptsetup", "open", "/dev/vault", "vault", "--key-file="+KeyFilePath)
 	var errb bytes.Buffer
 	cmd.Stderr = &errb
 	stdin, err := cmd.StdinPipe()
@@ -122,7 +124,7 @@ func mountVaultProcess() error {
 		if dialogErr != nil {
 			fmt.Printf("Unable to show error dialog: %v", dialogErr)
 		}
-		return fmt.Errorf("Unable to unseal vault: %v", err)
+		return fmt.Errorf("unable to unseal vault: %v", err)
 	}
 
 	fmt.Println("Mounting vault...")
@@ -131,7 +133,7 @@ func mountVaultProcess() error {
 		if dialogErr != nil {
 			fmt.Printf("Unable to show error dialog: %v", dialogErr)
 		}
-		return fmt.Errorf("Unable to mount vault: %v", err)
+		return fmt.Errorf("unable to mount vault: %v", err)
 	}
 
 	err = showInfoDialog("Vault is mounted!")
@@ -196,5 +198,7 @@ func onUnmounted() {
 		if dialogErr != nil {
 			fmt.Printf("Unable to show error dialog: %v", dialogErr)
 		}
+	} else {
+		showInfoDialog("Vault is unmounted!")
 	}
 }
