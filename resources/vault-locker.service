@@ -1,0 +1,14 @@
+[Unit]
+Description=Vault Locker
+
+[Service]
+Type=simple
+ExecStart="/home/cmichaud/github.com/clems4ever/vault-locker/vault-locker"
+User=root
+Environment="DISPLAY=:0"
+Environment="XAUTHORITY=/home/cmichaud/.Xauthority"
+Environment="QT_DEBUG_PLUGIN=1"
+
+[Install]
+WantedBy=multi-user.target
+WantedBy=graphical.target
