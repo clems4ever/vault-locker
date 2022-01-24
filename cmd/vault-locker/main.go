@@ -1,14 +1,17 @@
 package main
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
-	"io"
-	"os/exec"
-	"strings"
+	"log"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
-	"github.com/godbus/dbus/v5"
+	"github.com/clems4ever/vault-unlocker/internal/vault"
+	"github.com/sirupsen/logrus"
+	"github.com/spf13/cobra"
 )
 
 var KeyFilePath = "/root/vault.bin"
@@ -19,186 +22,135 @@ var ErrDialogCanceled = errors.New("user canceled dialog")
 // ErrProcessExitedAbnormally represent an abnormal termination of the process
 var ErrProcessExitedAbnormally = errors.New("process exited abnormally")
 
-func main() {
-	conn, err := dbus.SystemBus()
-	if err != nil {
-		panic(err)
-	}
-
-	conn.AddMatchSignal(
-		dbus.WithMatchInterface("com.clems4ever.Vault"),
-		dbus.WithMatchMember("OnMounted"))
-
-	conn.AddMatchSignal(
-		dbus.WithMatchInterface("com.clems4ever.Vault"),
-		dbus.WithMatchMember("OnUnmounted"))
-
-	signals := make(chan *dbus.Signal)
-	conn.Signal(signals)
-
-	fmt.Println("Waiting for events...")
-	for sig := range signals {
-		if sig.Name == "com.clems4ever.Vault.OnMounted" {
-			onMounted()
-		} else if sig.Name == "com.clems4ever.Vault.OnUnmounted" {
-			onUnmounted()
-		}
-	}
+var rootCmd = &cobra.Command{
+	Use:   "vault-locker",
+	Short: "vault-locker lock and unlock a secure vault",
 }
 
-func unsealVault(secret string) error {
-	cmd := exec.Command("cryptsetup", "open", "/dev/vault", "vault", "--key-file="+KeyFilePath)
-	var errb bytes.Buffer
-	cmd.Stderr = &errb
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return err
-	}
-	err = cmd.Start()
-	if err != nil {
-		return err
-	}
-	_, err = io.WriteString(stdin, secret)
-	if err != nil {
-		return err
-	}
-	err = cmd.Wait()
-	if err != nil {
-		if _, ok := err.(*exec.ExitError); ok {
-			return errors.New(strings.Trim(errb.String(), "\n"))
-		}
-		return err
-	}
-	return nil
+var unsealCmd = &cobra.Command{
+	Use:   "unseal",
+	Short: "unseal the vault",
+	Run: func(cmd *cobra.Command, args []string) {
+		unseal(vault.NewVault(KeyFilePath))
+	},
 }
 
-func runWithStderr(cmd *exec.Cmd) error {
-	var errb bytes.Buffer
-	cmd.Stderr = &errb
-	if err := cmd.Run(); err != nil {
-		if _, ok := err.(*exec.ExitError); ok {
-			return errors.New(strings.Trim(errb.String(), "\n"))
-		}
-		return err
-	}
-	return nil
+var sealCmd = &cobra.Command{
+	Use:   "seal",
+	Short: "seal the vault",
+	Run: func(cmd *cobra.Command, args []string) {
+		seal(vault.NewVault(KeyFilePath))
+	},
 }
 
-func sealVault() error {
-	return runWithStderr(exec.Command("cryptsetup", "close", "vault"))
-}
-
-func mountVault() error {
-	return runWithStderr(exec.Command("mount", "/dev/mapper/vault", "/vault"))
-}
-
-func unmountVault() error {
-	return runWithStderr(exec.Command("umount", "/vault"))
-}
-
-func showPasswordDialog() (string, error) {
-	secretBytes, err := exec.Command("qarma", "--password").Output()
-	if err != nil {
-		if exitError, ok := err.(*exec.ExitError); ok {
-			if exitError.ExitCode() == 1 {
-				return "", ErrDialogCanceled
-			}
-		}
-		return "", err
-	}
-	return strings.Trim(string(secretBytes), "\n"), nil
-}
-
-func mountVaultProcess() error {
-	var err error
-	var secret string
-	/* secret, err = showPasswordDialog()
-	if err != nil {
-		return err
-	}*/
-
-	fmt.Println("Unsealing vault...")
-	err = unsealVault(secret + "\n")
-	if err != nil {
-		dialogErr := showErrorDialog(fmt.Sprintf("Unable to unseal vault: %s", err))
-		if dialogErr != nil {
-			fmt.Printf("Unable to show error dialog: %v", dialogErr)
-		}
-		return fmt.Errorf("unable to unseal vault: %v", err)
-	}
-
-	fmt.Println("Mounting vault...")
-	if err := mountVault(); err != nil {
-		dialogErr := showErrorDialog(fmt.Sprintf("Unable to mount vault: %s", err))
-		if dialogErr != nil {
-			fmt.Printf("Unable to show error dialog: %v", dialogErr)
-		}
-		return fmt.Errorf("unable to mount vault: %v", err)
-	}
-
-	err = showInfoDialog("Vault is mounted!")
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func onMounted() {
-	err := mountVaultProcess()
-	if err != nil {
-		fmt.Println(err)
-	}
-
-	/* for err != ErrDialogCanceled && err != nil {
-		err = mountVaultProcess()
+var isUnsealedCmd = &cobra.Command{
+	Use:   "unsealed",
+	Short: "check if vault is sealed",
+	Run: func(cmd *cobra.Command, args []string) {
+		ok, err := vault.NewVault(KeyFilePath).IsUnsealed()
 		if err != nil {
-			fmt.Println(err)
+			logrus.Panic(err)
 		}
-	} */
-}
-
-func showErrorDialog(message string) error {
-	return exec.Command("qarma", "--error", "--text", message).Run()
-}
-
-func showInfoDialog(message string) error {
-	return exec.Command("qarma", "--info", "--text", message).Run()
-}
-
-func onUnmounted() {
-
-	var unmountingErr, sealingErr error
-	if err := unmountVault(); err != nil {
-		// If device is already unmounted we don't show error
-		if err.Error() != "umount: /vault: not mounted." {
-			unmountingErr = err
-			fmt.Printf("Unable to unmount vault: %s\n", err)
+		if ok {
+			os.Exit(0)
+		} else {
+			os.Exit(1)
 		}
+	},
+}
+
+var daemonCmd = &cobra.Command{
+	Use:   "daemon",
+	Short: "run vault-locker in daemon mode",
+	Run: func(cmd *cobra.Command, args []string) {
+		d, err := cmd.PersistentFlags().GetDuration("autoseal-duration")
+		if err != nil {
+			logrus.Errorf("unable to parse autoseal-duration: %s", err)
+		}
+		RunDaemon(d)
+	},
+}
+
+func main() {
+	daemonCmd.PersistentFlags().Duration("autoseal-duration", 60*time.Second, "time before the vault is automatically sealed")
+	rootCmd.AddCommand(unsealCmd, sealCmd, isUnsealedCmd, daemonCmd)
+
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+type MountListener struct {
+	vault vault.Vault
+}
+
+func NewMountListener(v vault.Vault) MountListener {
+	return MountListener{
+		vault: vault.NewVault(KeyFilePath),
+	}
+}
+func (ml MountListener) OnUnseal() {
+	unseal(ml.vault)
+}
+func (ml MountListener) OnSeal() {
+	seal(ml.vault)
+}
+
+func RunDaemon(autoSealDuration time.Duration) {
+	bus, err := vault.NewBus()
+	if err != nil {
+		logrus.Panic(err)
 	}
 
-	if err := sealVault(); err != nil {
-		if err.Error() != "Device vault is not active." {
-			sealingErr = err
-			fmt.Printf("Unable to seal vault: %s\n", err)
-		}
-	}
+	v := vault.NewVault(KeyFilePath)
 
-	if unmountingErr != nil && sealingErr != nil {
-		dialogErr := showErrorDialog(fmt.Sprintf("Unable to unmount and seal vault: %v, %v", unmountingErr, sealingErr))
+	cancelChan := make(chan os.Signal, 1)
+	// catch SIGETRM or SIGINTERRUPT
+	signal.Notify(cancelChan, syscall.SIGTERM, syscall.SIGINT)
+
+	// Run the autoseal routine in background
+	go vault.AutoSealRoutine(v, autoSealDuration)
+
+	listener := NewMountListener(v)
+	bus.Subscribe(listener)
+
+	logrus.Infof("daemon is running with an autoseal duration of %s", autoSealDuration.String())
+	// run the bus listener
+	go bus.Listen()
+
+	sig := <-cancelChan
+	log.Printf("Caught SIGTERM %v", sig)
+
+	err = v.Seal()
+	if err != nil {
+		logrus.Errorf("unable to unseal vault: %s", err)
+	}
+	logrus.Info("vault has been sealed automatically before quitting")
+}
+
+func unseal(v vault.Vault) {
+	err := v.Unseal()
+	if err != nil {
+		dialogErr := vault.ShowErrorDialog(err.Error())
 		if dialogErr != nil {
-			fmt.Printf("Unable to show error dialog: %v", dialogErr)
-		}
-	} else if unmountingErr != nil {
-		dialogErr := showErrorDialog(fmt.Sprintf("Unable to unmount vault: %v", unmountingErr))
-		if dialogErr != nil {
-			fmt.Printf("Unable to show error dialog: %v", dialogErr)
-		}
-	} else if sealingErr != nil {
-		dialogErr := showErrorDialog(fmt.Sprintf("Unable to unmount vault: %v", sealingErr))
-		if dialogErr != nil {
-			fmt.Printf("Unable to show error dialog: %v", dialogErr)
+			logrus.Error("unable to show error dialog: %s", dialogErr)
 		}
 	} else {
-		showInfoDialog("Vault is unmounted!")
+		logrus.Info("vault has been unsealed")
+		vault.ShowInfoDialog("vault is unsealed!")
+	}
+}
+
+func seal(v vault.Vault) {
+	err := v.Seal()
+	if err != nil {
+		dialogErr := vault.ShowErrorDialog(err.Error())
+		if dialogErr != nil {
+			logrus.Error("unable to show error dialog: %v", dialogErr)
+		}
+	} else {
+		logrus.Info("vault has been sealed")
+		vault.ShowInfoDialog("vault is sealed!")
 	}
 }

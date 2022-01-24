@@ -3,7 +3,7 @@ Description=Vault Locker
 
 [Service]
 Type=simple
-ExecStart="/home/cmichaud/github.com/clems4ever/vault-locker/vault-locker"
+ExecStart=/home/cmichaud/github.com/clems4ever/vault-locker/vault-locker daemon --autoseal-duration 2m
 User=root
 Environment="DISPLAY=:0"
 Environment="XAUTHORITY=/home/cmichaud/.Xauthority"
